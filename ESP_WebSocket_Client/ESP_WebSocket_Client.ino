@@ -1,14 +1,14 @@
 // ESP WebSocket Client
-// Needs some work like adding ArduinoJSON
 
 #include <Arduino.h>
-#include <sensorShieldLib.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
-#include <WiFiClientSecure.h>
 #include <WebSocketsClient.h>
+#include <sensorShieldLib.h>
+#include <ArduinoJson.h>
 
-const int clientID = 2;
+#define CLIENT_ID 1
+#define PRINT_LOGS false
 
 const char* ssid = "feather32";
 const char* password = "feather32";
@@ -17,54 +17,47 @@ WiFiMulti WiFiMulti;
 WebSocketsClient webSocket;
 SensorShield board;
 
-#define USE_SERIAL Serial
-
 int getClientID() {
-  return clientID;
+  return CLIENT_ID;
 }
 
 int secondsPassed() {
-	return millis() / 1000 ;
-}
-
-void hexdump(const void* mem, uint32_t len, uint8_t cols = 16) {
-  const uint8_t* src = (const uint8_t*)mem;
-  USE_SERIAL.printf("\n[HEXDUMP] Address: 0x%08X len: 0x%X (%d)", (ptrdiff_t)src, len, len);
-  for (uint32_t i = 0; i < len; i++) {
-    if (i % cols == 0) {
-      USE_SERIAL.printf("\n[0x%08X] 0x%08X: ", (ptrdiff_t)src, i);
-    }
-    USE_SERIAL.printf("%02X ", *src);
-    src++;
-  }
-  USE_SERIAL.printf("\n");
+	return (millis() / 10000) * 10 ;
 }
 
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
-
   switch (type) {
     case WStype_DISCONNECTED:
-      USE_SERIAL.printf("[WSc] Disconnected!\n");
+      if(PRINT_LOGS) Serial.printf("[LOG] Disconnected!\n");
       break;
+
     case WStype_CONNECTED:
-      USE_SERIAL.printf("[WSc] Connected to url: %s\n", payload);
-
-      // send message to server when Connected
-      webSocket.sendTXT("Connected");
+      if(PRINT_LOGS) Serial.printf("[LOG] Connected to url: %s\n", payload);
       break;
+
     case WStype_TEXT:
-      USE_SERIAL.printf("[WSc] get text: %s\n", payload);
+      {
+        if(PRINT_LOGS) Serial.printf("[LOG] get text: %s\n", payload);
+        JsonDocument doc;
+        char raw[length];
+        memcpy(raw, payload, length);
+        DeserializationError error = deserializeJson(doc, raw);
 
-      // send message to server
-      // webSocket.sendTXT("message here");
+        if (error) {
+          Serial.print(F("[LOG] deserializeJson() failed: "));
+          Serial.println(error.f_str());
+        }
+        else {
+          int clientID = doc["clientID"];
+          if(clientID != CLIENT_ID) {
+            // do something if message from another client
+            Serial.printf("%s\n", payload);
+          }
+        }
+      }
       break;
+
     case WStype_BIN:
-      USE_SERIAL.printf("[WSc] get binary length: %u\n", length);
-      hexdump(payload, length);
-
-      // send data to server
-      // webSocket.sendBIN(payload, length);
-      break;
     case WStype_ERROR:
     case WStype_FRAGMENT_TEXT_START:
     case WStype_FRAGMENT_BIN_START:
@@ -75,20 +68,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 }
 
 void setup() {
-  USE_SERIAL.begin(115200);
-
-  //Serial.setDebugOutput(true);
-  USE_SERIAL.setDebugOutput(true);
-
-  USE_SERIAL.println();
-  USE_SERIAL.println();
-  USE_SERIAL.println();
-
-  for (uint8_t t = 4; t > 0; t--) {
-    USE_SERIAL.printf("[SETUP] BOOT WAIT %d...\n", t);
-    USE_SERIAL.flush();
-    delay(1000);
-  }
+  Serial.begin(115200);
+  Serial.print("CLIENT_ID ");
+  Serial.println(CLIENT_ID);
 
   WiFiMulti.addAP(ssid, password);
 
@@ -106,16 +88,15 @@ void setup() {
   // try ever 5000 again if connection has failed
   webSocket.setReconnectInterval(5000);
 
-  board.init();
+  board.init(Serial);
   board.addSensor("clientID", getClientID);
   board.addSensor("seconds", secondsPassed);
 }
 
-unsigned long messageTimestamp = 0;
 void loop() {
   webSocket.loop();
 
-  board.update();
+  board.update(false);
   if(board.hasNewValue == true) {
     webSocket.sendTXT(board.JSONMessage);
   }
